@@ -1,0 +1,178 @@
+---
+title: "Project 2"
+author: "Wanjing Ding"
+date: "2025-11-15"
+output:
+  word_document: default
+  pdf_document: default
+---
+# Github link: https://github.com/WanjingDing/Project-2
+
+```{r, message=FALSE, echo = FALSE}
+library(readr)
+library(here)
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+AQ_2018_raw <- read_csv(here("data", "AQ_2018.csv"))
+AQ_2019_raw <- read_csv(here("data", "AQ_2019.csv"))
+AQ_2020_raw <- read_csv(here("data", "AQ_2020.csv"))
+```
+
+```{r echo=FALSE}
+process_air_quality <- function(df) {
+  # Rename columns
+  df <- df %>%
+    rename(
+      co_max8hr = `Daily Max 8-hour CO Concentration`,
+      co_unit = units_CO,
+      pm_mean = `Daily Mean PM2.5 Concentration`,
+      pm_unit = units_PM,
+      o3_max8hr = `Daily Max 8-hour Ozone Concentration`,
+      o3_unit = units_O3
+    )
+
+  # Convert date to Date format
+  df <- df %>%
+    mutate(Date = as.Date(Date, format = "%m/%d/%Y"))
+
+  # Average multiple measurements per day
+  df <- df %>%
+    group_by(Date) %>%
+    summarize(
+      co_max8hr = mean(co_max8hr, na.rm = TRUE),
+       co_unit = first(co_unit),
+      pm_mean = mean(pm_mean, na.rm = TRUE),
+      pm_unit = first(pm_unit),
+      o3_max8hr = mean(o3_max8hr, na.rm = TRUE),
+      o3_unit = first(o3_unit),
+      .groups = "drop"
+    )
+
+  # Remove duplicate rows
+  df <- df %>% distinct()
+
+  # Replace negative pollutant values with zero
+  pollutant_cols <- c("co_max8hr", "pm_mean", "o3_max8hr")
+  df[pollutant_cols] <- lapply(df[pollutant_cols], function(x) ifelse(x < 0, 0, x))
+
+  return(df)
+}
+
+AQ_2018 <- process_air_quality(AQ_2018_raw)
+AQ_2019 <- process_air_quality(AQ_2019_raw)
+AQ_2020 <- process_air_quality(AQ_2020_raw)
+```
+
+```{r echo=FALSE}
+AQ_2018 <- AQ_2018 %>% mutate(year = 2018)
+AQ_2019 <- AQ_2019 %>% mutate(year = 2019)
+AQ_2020 <- AQ_2020 %>% mutate(year = 2020)
+AQ_all <- bind_rows(AQ_2018, AQ_2019, AQ_2020)
+AQ_all <- AQ_all %>%
+  mutate(
+    month_num = month(Date),
+    month_label = month(Date, label = TRUE, abbr = TRUE)
+  )
+head(AQ_2018)
+head(AQ_2019)
+head(AQ_2020)
+```
+
+```{r echo=FALSE}
+# Compute monthly summary
+monthly_summary <- AQ_all %>%
+  group_by(month_num, month_label) %>%
+  summarize(
+    co_mean = mean(co_max8hr, na.rm = TRUE),
+    co_se = sd(co_max8hr, na.rm = TRUE)/sqrt(n()),
+    o3_mean = mean(o3_max8hr, na.rm = TRUE),
+    o3_se = sd(o3_max8hr, na.rm = TRUE)/sqrt(n()),
+    .groups = "drop"
+  )
+
+# Pivot longer - cleaner approach
+monthly_long <- monthly_summary %>%
+  pivot_longer(
+    cols = c(co_mean, o3_mean),
+    names_to = "pollutant",
+    values_to = "mean"
+  ) %>%
+  mutate(
+    se = case_when(
+      pollutant == "co_mean" ~ monthly_summary$co_se[match(month_num, monthly_summary$month_num)],
+      pollutant == "o3_mean" ~ monthly_summary$o3_se[match(month_num, monthly_summary$month_num)]
+    ),
+    pollutant = recode(pollutant, co_mean = "CO", o3_mean = "O3")
+  )
+## Create Plot 1
+ggplot(monthly_long, aes(x = month_label, y = mean, color = pollutant, group = pollutant)) +
+  geom_point(size = 3) +
+  geom_line(linewidth = 1) +
+  geom_errorbar(aes(ymin = mean - 1.96*se, ymax = mean + 1.96*se), 
+                width = 0.2, linewidth = 0.8) +
+  labs(
+    title = "Monthly Average CO and O3 Concentrations",
+    subtitle = "Error bars represent 95% confidence intervals",
+    x = "Month",
+    y = "Concentration (ppm)",  # Added units!
+    color = "Pollutant"
+  ) +
+  theme_minimal(base_size = 14) +
+  scale_color_manual(values = c("CO" = "steelblue", "O3" = "firebrick")) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    legend.position = "top"
+  )
+```
+
+## Alternative plot (in case the ozone error bars are too small to observe)
+```{r echo=FALSE}
+ggplot(monthly_long, aes(x = month_label, y = mean, color = pollutant, group = pollutant)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = mean - 1.96*se, ymax = mean + 1.96*se), 
+                width = 0.3, linewidth = 0.8) +
+  facet_wrap(~pollutant, scales = "free_y", ncol = 1) +
+  labs(
+    title = "Monthly Average CO and O3 Concentrations (2018-2020)",
+    subtitle = "Error bars represent 95% confidence intervals",
+    x = "Month",
+    y = "Concentration (ppm)"
+  ) +
+  theme_minimal(base_size = 14) +
+  scale_color_manual(values = c("CO" = "steelblue", "O3" = "firebrick")) +
+  theme(
+    plot.title = element_text(face = "bold", size = 15),
+    plot.subtitle = element_text(size = 11, color = "gray40"),
+    legend.position = "none", 
+    strip.text = element_text(face = "bold", size = 12, color = "black"),
+    strip.background = element_rect(fill = "gray90", color = NA),
+    panel.grid.minor = element_blank(),
+    axis.text.x = element_text(angle = 0)
+  )
+```
+
+```{r echo=FALSE}
+# Monthly PM2.5 per year
+pm_monthly <- AQ_all %>%
+  group_by(year, month_num, month_label) %>%
+  summarize(
+    pm_mean = mean(pm_mean, na.rm = TRUE),
+    .groups = "drop"
+  )
+ggplot(pm_monthly, aes(x = month_num, y = pm_mean, color = factor(year))) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 3) +
+  scale_x_continuous(breaks = 1:12, labels = month.abb) +
+  scale_color_manual(values = c("2018"="darkorange", "2019"="dodgerblue", "2020"="seagreen")) +
+  labs(
+    title = "Monthly PM2.5 Concentration by Year",
+    x = "Month",
+    y = "PM2.5 (µg/m³)",
+    color = "Year"
+  ) +
+  theme_minimal(base_size = 14)
+
+
+```
